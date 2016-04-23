@@ -10,7 +10,6 @@ import json
 import os
 from pathlib import Path
 import posixpath
-import sys
 import tarfile
 import tempfile
 import zipfile
@@ -42,6 +41,12 @@ PLATFORM_PAIRS = [
 
 class CaseSensitiveContextParser(configparser.ConfigParser):
     optionxfrom = staticmethod(str)
+
+def _add_to_tarball(tf, arcname, contents):
+    ti = tarfile.TarInfo(arcname)
+    ti.size = len(contents)
+    tf.addfile(ti, BytesIO(contents))
+
 
 class PackageBuilder:
     def __init__(self, wheel_contents, python_version, platform, bitness):
@@ -155,20 +160,15 @@ class PackageBuilder:
 
         record_path = self.site_packages_path() \
                       + self.wheel_contents.find_dist_info().name + '/RECORD'
-        ti = tarfile.TarInfo(record_path)
-        contents = sio.getvalue().encode('utf-8')
-        ti.size = len(contents)
-        tf.addfile(ti, BytesIO(contents))
+        _add_to_tarball(tf, record_path, sio.getvalue().encode('utf-8'))
         # The RECORD file was already recorded for conda's files list when the
         # rest of .dist-info was added.
 
     def _write_script_unix(self, tf, name, contents):
         path = self.scripts_path() + name
-        ti = tarfile.TarInfo(path)
         contents = contents.encode('utf-8')
-        ti.size = len(contents)
-        tf.addfile(ti, BytesIO(contents))
-        self.record_file(ti.name, has_prefix=True)
+        _add_to_tarball(tf, path, contents)
+        self.record_file(path, has_prefix=True)
         self._py_record_file(path, contents)
 
     def _write_script_windows(self, tf, name, contents):
@@ -219,9 +219,7 @@ class PackageBuilder:
           "version": self.wheel_contents.metadata['Version'][0]
         }
         contents = json.dumps(ix, indent=2, sort_keys=True).encode('utf-8')
-        ti = tarfile.TarInfo('info/index.json')
-        ti.size = len(contents)
-        tf.addfile(ti, BytesIO(contents))
+        _add_to_tarball(tf, 'info/index.json', contents)
 
     def write_has_prefix_list(self, tf):
         lines = [
@@ -229,15 +227,11 @@ class PackageBuilder:
             for path in self.has_prefix_files
         ]
         contents = '\n'.join(lines).encode('utf-8')
-        ti = tarfile.TarInfo('info/has_prefix')
-        ti.size = len(contents)
-        tf.addfile(ti, BytesIO(contents))
+        _add_to_tarball(tf, 'info/has_prefix', contents)
 
     def write_files_list(self, tf):
         contents = '\n'.join(self.files).encode('utf-8')
-        ti = tarfile.TarInfo('info/files')
-        ti.size = len(contents)
-        tf.addfile(ti, BytesIO(contents))
+        _add_to_tarball(tf, 'info/files', contents)
 
 
 class BadWheelError(Exception):
