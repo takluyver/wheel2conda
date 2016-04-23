@@ -1,3 +1,4 @@
+import argparse
 from collections import defaultdict
 import configparser
 from enum import Enum
@@ -267,8 +268,12 @@ class WheelContents:
         return PYTHON_VERSIONS
     
 
-def main():
-    wc = WheelContents(sys.argv[1])
+def main(argv=None):
+    ap = argparse.ArgumentParser()
+    ap.add_argument('wheel_file')
+    args = ap.parse_args(argv)
+
+    wc = WheelContents(args.wheel_file)
     wc.check()
 
     for platform, bitness in PLATFORM_PAIRS:
