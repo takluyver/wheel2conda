@@ -40,20 +40,14 @@ class CaseSensitiveContextParser(configparser.ConfigParser):
     optionxfrom = staticmethod(str)
 
 class PackageBuilder:
-    def __init__(self, unpacked_wheel, metadata, python_version, platform, bitness):
-        self.unpacked_wheel = unpacked_wheel
-        self.metadata = metadata
+    def __init__(self, wheel_contents, python_version, platform, bitness):
+        self.wheel_contents = wheel_contents
         self.python_version = python_version
         self.platform = platform
         self.bitness = bitness
         self.files = []
         self.has_prefix_files = []
         self.build_no = 0
-
-    def _find_dist_info(self):
-        for p in self.unpacked_wheel.iterdir():
-            if p.is_dir() and p.name.endswith('.dist-info'):
-                return p
 
     def record_file(self, arcname, has_prefix=False):
         self.files.append(arcname)
@@ -97,7 +91,7 @@ class PackageBuilder:
 
     def add_module(self, tf):
         site_packages = self.site_packages_path()
-        for src in self.unpacked_wheel.iterdir():
+        for src in self.wheel_contents.unpacked.iterdir():
             if src.name.endswith('.data'):
                 self._add_data_dir(tf, src)
                 continue
@@ -133,7 +127,7 @@ class PackageBuilder:
         self.record_file(dst)
 
     def create_scripts(self, tf):
-        ep_file = self._find_dist_info() / 'entry_points.txt'
+        ep_file = self.wheel_contents._find_dist_info() / 'entry_points.txt'
         if not ep_file.is_file():
             return
 
@@ -164,10 +158,10 @@ class PackageBuilder:
             "python {}*".format(self.python_version)
           ],
           "license": "UNKNOWN",
-          "name": self.metadata['Name'][0],
+          "name": self.wheel_contents.metadata['Name'][0],
           "platform": self.platform.name,
           "subdir": "{}-{}".format(self.platform.name, self.bitness),
-          "version": self.metadata['Version'][0]
+          "version": self.wheel_contents.metadata['Version'][0]
         }
         contents = json.dumps(ix, indent=2, sort_keys=True).encode('utf-8')
         ti = tarfile.TarInfo('info/index.json')
@@ -190,11 +184,6 @@ class PackageBuilder:
         ti.size = len(contents)
         tf.addfile(ti, BytesIO(contents))
 
-def unpack_wheel(whl_file):
-    td = tempfile.TemporaryDirectory()
-    with zipfile.ZipFile(whl_file) as zf:
-        zf.extractall(td.name)
-    return td
 
 class BadWheelError(Exception):
     pass
@@ -212,46 +201,76 @@ def _read_metadata(path):
 
     return dict(res)
 
-def check_wheel_contents(unpacked_wheel):
-    dist_info = None
-    data_dir = None
+class WheelContents:
+    def __init__(self, whl_file):
+        self.td = tempfile.TemporaryDirectory()
+        with zipfile.ZipFile(whl_file) as zf:
+            zf.extractall(self.td.name)
+        self.unpacked = Path(self.td.name)
 
-    for x in unpacked_wheel.iterdir():
-        if x.name.endswith('.dist-info'):
-            if not x.is_dir():
-                raise BadWheelError(".dist-info not a directory")
-            if dist_info is not None:
-                raise BadWheelError("Multiple .dist-info directories")
-            dist_info = x
+        self.metadata = _read_metadata(self._find_dist_info() / 'METADATA')
 
-        if x.name.endswith('.data'):
-            if not x.is_dir():
-                raise BadWheelError(".data not a directory")
-            elif data_dir is not None:
-                raise BadWheelError("Multiple .data directories")
-            data_dir = x
+    def _find_dist_info(self):
+        for x in self.unpacked.iterdir():
+            if x.name.endswith('.dist-info'):
+                return x
 
-    if dist_info is None:
         raise BadWheelError("Didn't find .dist-info directory")
 
-    wheel_metadata = _read_metadata(dist_info / 'WHEEL')
-    if wheel_metadata['Wheel-Version'][0] != '1.0':
-        raise BadWheelError("wheel2conda only knows about wheel format 1.0")
-    if wheel_metadata['Root-Is-Purelib'][0].lower() != 'true':
-        raise BadWheelError("Can't currently autoconvert packages with platlib")
+    def check(self):
+        dist_info = None
+        data_dir = None
 
-    metadata = _read_metadata(dist_info / 'METADATA')
-    for field in ('Name', 'Version'):
-        if field not in metadata:
-            raise BadWheelError("Missing required metadata field: %s" % field)
+        for x in self.unpacked.iterdir():
+            if x.name.endswith('.dist-info'):
+                if not x.is_dir():
+                    raise BadWheelError(".dist-info not a directory")
+                if dist_info is not None:
+                    raise BadWheelError("Multiple .dist-info directories")
+                dist_info = x
 
-    return metadata
+            if x.name.endswith('.data'):
+                if not x.is_dir():
+                    raise BadWheelError(".data not a directory")
+                elif data_dir is not None:
+                    raise BadWheelError("Multiple .data directories")
+                data_dir = x
+
+        if dist_info is None:
+            raise BadWheelError("Didn't find .dist-info directory")
+
+        wheel_metadata = _read_metadata(dist_info / 'WHEEL')
+        if wheel_metadata['Wheel-Version'][0] != '1.0':
+            raise BadWheelError("wheel2conda only knows about wheel format 1.0")
+        if wheel_metadata['Root-Is-Purelib'][0].lower() != 'true':
+            raise BadWheelError("Can't currently autoconvert packages with platlib")
+
+        for field in ('Name', 'Version'):
+            if field not in self.metadata:
+                raise BadWheelError("Missing required metadata field: %s" % field)
+
+    def filter_compatible_pythons(self):
+        if 'Requires-Python' in self.metadata:
+            rp = self.metadata['Requires-Python'][0]
+            if rp.startswith(('3', '>3', '>=3')):
+                return [p for p in PYTHON_VERSIONS if not p.startswith('2.')]
+            elif rp in ('<3', '<3.0'):
+                return [p for p in PYTHON_VERSIONS if p.startswith('2.')]
+
+        wheel_metadata = _read_metadata(self._find_dist_info() / 'WHEEL')
+        py_tags = {t.split('-')[0] for t in wheel_metadata['Tag']}
+        if py_tags == {'py3'}:
+            return [p for p in PYTHON_VERSIONS if not p.startswith('2.')]
+        elif py_tags == {'py2'}:
+            return [p for p in PYTHON_VERSIONS if p.startswith('2.')]
+
+        return PYTHON_VERSIONS
     
 
 def main():
-    td = unpack_wheel(sys.argv[1])
-    unpacked_wheel = Path(td.name)
-    metadata = check_wheel_contents(unpacked_wheel)
+    wc = WheelContents(sys.argv[1])
+    wc.check()
+
     for platform, bitness in PLATFORM_PAIRS:
         d = Path(platform.name + '-' + bitness)
         try:
@@ -259,19 +278,18 @@ def main():
         except FileExistsError:
             pass
 
-        for py_version in PYTHON_VERSIONS:
+        for py_version in wc.filter_compatible_pythons():
             print('Converting for: {}-{},'.format(platform.name, bitness),
                   'Python', py_version)
-            pb = PackageBuilder(unpacked_wheel, metadata,
-                                py_version, platform, bitness)
+            pb = PackageBuilder(wc, py_version, platform, bitness)
             filename = '{name}-{version}-py{xy}_0.tar.bz2'.format(
-                name = metadata['Name'][0],
-                version = metadata['Version'][0],
+                name = wc.metadata['Name'][0],
+                version = wc.metadata['Version'][0],
                 xy = py_version.replace('.', ''),
             )
             with (d / filename).open('wb') as f:
                 pb.build(f)
-    td.cleanup()
+    wc.td.cleanup()
 
 if __name__ == '__main__':
     main()
