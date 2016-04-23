@@ -1,8 +1,11 @@
 import argparse
+import base64
 from collections import defaultdict
 import configparser
+import csv
 from enum import Enum
-from io import BytesIO
+import hashlib
+from io import BytesIO, StringIO
 import json
 import os
 from pathlib import Path
@@ -48,6 +51,7 @@ class PackageBuilder:
         self.bitness = bitness
         self.files = []
         self.has_prefix_files = []
+        self.py_record_extra = []
         self.build_no = 0
 
     def record_file(self, arcname, has_prefix=False):
@@ -86,9 +90,11 @@ class PackageBuilder:
         with tarfile.open(fileobj=fileobj, mode='w:bz2') as tf:
             self.add_module(tf)
             self.create_scripts(tf)
+            self.write_pep376_record(tf)
             self.write_index(tf)
             self.write_has_prefix_list(tf)
             self.write_files_list(tf)
+
 
     def add_module(self, tf):
         site_packages = self.site_packages_path()
@@ -98,6 +104,15 @@ class PackageBuilder:
                 continue
 
             dst = site_packages + src.name
+            if src.name.endswith('.dist-info'):
+                # Skip RECORD for now, we'll add it later, with rows for scripts
+                def exclude_record(ti):
+                    return None if ti.name.endswith('RECORD') else ti
+                tf.add(str(src), arcname=dst, filter=exclude_record)
+                self.record_file_or_dir(dst, src)
+                continue
+
+            # Actual module/package file/directory
             tf.add(str(src), arcname=dst)
             self.record_file_or_dir(dst, src)
 
@@ -111,13 +126,50 @@ class PackageBuilder:
             else:
                 raise NotImplementedError('%s under data dir' % d.name)
 
+    def _py_record_file(self, relpath, contents):
+        h = hashlib.sha256(contents)
+        digest = base64.urlsafe_b64encode(h.digest()).decode('ascii').rstrip('=')
+        self.py_record_extra.append((relpath, 'sha256='+digest, len(contents)))
+
+    def write_pep376_record(self, tf):
+        sio = StringIO()
+        installed_record = csv.writer(sio)
+        if self.platform is Platform.win:
+            prefix_from_site_pkgs = '../..'
+        else:
+            prefix_from_site_pkgs = '../../..'
+
+        with (self.wheel_contents.find_dist_info() / 'RECORD').open() as f:
+            wheel_record = csv.reader(f)
+            for row in wheel_record:
+                path_parts = row[0].split('/')
+                if len(path_parts) > 2 \
+                        and path_parts[0].endswith('.data') \
+                        and path_parts[1] == 'data':
+                    row[0] = posixpath.join(prefix_from_site_pkgs, *path_parts[2:])
+                installed_record.writerow(row)
+
+        for row in self.py_record_extra:
+            path = posixpath.join(prefix_from_site_pkgs, row[0])
+            installed_record.writerow((path,) + row[1:])
+
+        record_path = self.site_packages_path() \
+                      + self.wheel_contents.find_dist_info().name + '/RECORD'
+        ti = tarfile.TarInfo(record_path)
+        contents = sio.getvalue().encode('utf-8')
+        ti.size = len(contents)
+        tf.addfile(ti, BytesIO(contents))
+        # The RECORD file was already recorded for conda's files list when the
+        # rest of .dist-info was added.
 
     def _write_script_unix(self, tf, name, contents):
-        ti = tarfile.TarInfo(self.scripts_path() + name)
+        path = self.scripts_path() + name
+        ti = tarfile.TarInfo(path)
         contents = contents.encode('utf-8')
         ti.size = len(contents)
         tf.addfile(ti, BytesIO(contents))
         self.record_file(ti.name, has_prefix=True)
+        self._py_record_file(path, contents)
 
     def _write_script_windows(self, tf, name, contents):
         self._write_script_unix(tf, name+'-script.py', contents)
@@ -126,9 +178,11 @@ class PackageBuilder:
         dst = self.scripts_path() + name + '.exe'
         tf.add(src, arcname=dst)
         self.record_file(dst)
+        with open(src, 'rb') as f:
+            self._py_record_file(dst, f.read())
 
     def create_scripts(self, tf):
-        ep_file = self.wheel_contents._find_dist_info() / 'entry_points.txt'
+        ep_file = self.wheel_contents.find_dist_info() / 'entry_points.txt'
         if not ep_file.is_file():
             return
 
@@ -209,9 +263,9 @@ class WheelContents:
             zf.extractall(self.td.name)
         self.unpacked = Path(self.td.name)
 
-        self.metadata = _read_metadata(self._find_dist_info() / 'METADATA')
+        self.metadata = _read_metadata(self.find_dist_info() / 'METADATA')
 
-    def _find_dist_info(self):
+    def find_dist_info(self):
         for x in self.unpacked.iterdir():
             if x.name.endswith('.dist-info'):
                 return x
@@ -258,7 +312,7 @@ class WheelContents:
             elif rp in ('<3', '<3.0'):
                 return [p for p in PYTHON_VERSIONS if p.startswith('2.')]
 
-        wheel_metadata = _read_metadata(self._find_dist_info() / 'WHEEL')
+        wheel_metadata = _read_metadata(self.find_dist_info() / 'WHEEL')
         py_tags = {t.split('-')[0] for t in wheel_metadata['Tag']}
         if py_tags == {'py3'}:
             return [p for p in PYTHON_VERSIONS if not p.startswith('2.')]
