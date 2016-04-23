@@ -16,9 +16,7 @@ import win_cli_launchers
 class Platform(Enum):
     linux = 1
     osx = 2
-    windows = 3
-
-pkgdir = Path(__file__).parent
+    win = 3
 
 script_template = """\
 #!{interpreter}
@@ -28,6 +26,15 @@ if __name__ == '__main__':
 """
 
 PREFIX = '/opt/anaconda1anaconda2anaconda3'
+
+PYTHON_VERSIONS = ['3.5', '3.4', '2.7']
+PLATFORM_PAIRS = [
+    (Platform.linux, '64'),
+    (Platform.linux, '32'),
+    (Platform.osx, '64'),
+    (Platform.win, '64'),
+    (Platform.win, '32'),
+]
 
 class CaseSensitiveContextParser(configparser.ConfigParser):
     optionxfrom = staticmethod(str)
@@ -69,13 +76,13 @@ class PackageBuilder:
             self.record_file(arcname)
 
     def site_packages_path(self):
-        if self.platform is Platform.windows:
+        if self.platform is Platform.win:
             return 'Lib/site-packages/'
         else:
             return 'lib/python{}/site-packages/'.format(self.python_version)
 
     def scripts_path(self):
-        if self.platform is Platform.windows:
+        if self.platform is Platform.win:
             return 'Scripts/'
         else:
             return 'bin/'
@@ -141,7 +148,7 @@ class PackageBuilder:
                 # This is replaced when the package is installed:
                 interpreter=PREFIX+'/bin/python',
             )
-            if self.platform == Platform.windows:
+            if self.platform == Platform.win:
                 self._write_script_windows(tf, name, s)
             else:
                 self._write_script_unix(tf, name, s)
@@ -245,9 +252,25 @@ def main():
     td = unpack_wheel(sys.argv[1])
     unpacked_wheel = Path(td.name)
     metadata = check_wheel_contents(unpacked_wheel)
-    pb = PackageBuilder(unpacked_wheel, metadata, '3.5', Platform.linux, '64')
-    with open('test_pkg.tar.bz2', 'wb') as f:
-        pb.build(f)
+    for platform, bitness in PLATFORM_PAIRS:
+        d = Path(platform.name + '-' + bitness)
+        try:
+            d.mkdir()
+        except FileExistsError:
+            pass
+
+        for py_version in PYTHON_VERSIONS:
+            print('Converting for: {}-{},'.format(platform.name, bitness),
+                  'Python', py_version)
+            pb = PackageBuilder(unpacked_wheel, metadata,
+                                py_version, platform, bitness)
+            filename = '{name}-{version}-py{xy}_0.tar.bz2'.format(
+                name = metadata['Name'][0],
+                version = metadata['Version'][0],
+                xy = py_version.replace('.', ''),
+            )
+            with (d / filename).open('wb') as f:
+                pb.build(f)
     td.cleanup()
 
 if __name__ == '__main__':
