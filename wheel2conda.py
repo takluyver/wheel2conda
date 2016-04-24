@@ -47,6 +47,32 @@ def _add_to_tarball(tf, arcname, contents):
     ti.size = len(contents)
     tf.addfile(ti, BytesIO(contents))
 
+_license_classifiers = {
+    'License :: OSI Approved :: MIT License': 'MIT',
+    'License :: OSI Approved :: BSD License': 'BSD',
+    'License :: OSI Approved :: Apache Software License': 'Apache',
+    'License :: OSI Approved :: GNU General Public License (GPL)': 'GPL',
+    'License :: OSI Approved :: GNU General Public License v2 (GPLv2)': 'GPLv2',
+    'License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)': 'GPLv2+',
+    'License :: OSI Approved :: GNU General Public License v3 (GPLv3)': 'GPLv3',
+    'License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)': 'GPLv3+',
+    'License :: OSI Approved :: GNU Lesser General Public License v2 (LGPLv2)': 'LGPLv2',
+    'License :: OSI Approved :: GNU Lesser General Public License v2 or later (LGPLv2+)': 'LGPLv2+',
+    'License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)': 'LGPLGv3',
+    'License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)': 'LGPLv3+',
+    'License :: OSI Approved :: GNU Library or Lesser General Public License (LGPL)': 'LGPL',
+}
+
+def identify_license(metadata):
+    if ('License' in metadata) and (metadata['License'][0].lower() != 'unknown'):
+        return metadata['License'][0]
+    for clf in metadata.get('Classifier', []):
+        print('Checking', clf)
+        if clf in _license_classifiers:
+            print('Matched')
+            return _license_classifiers[clf]
+
+    return 'UNKNOWN'
 
 class PackageBuilder:
     def __init__(self, wheel_contents, python_version, platform, bitness):
@@ -212,7 +238,7 @@ class PackageBuilder:
           "depends": [
             "python {}*".format(self.python_version)
           ],
-          "license": "UNKNOWN",
+          "license": identify_license(self.wheel_contents.metadata),
           "name": self.wheel_contents.metadata['Name'][0],
           "platform": self.platform.name,
           "subdir": "{}-{}".format(self.platform.name, self.bitness),
