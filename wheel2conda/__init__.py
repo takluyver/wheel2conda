@@ -16,6 +16,8 @@ import zipfile
 
 import win_cli_launchers
 
+from .requirements import requires_dist_to_conda_requirements
+
 class Platform(Enum):
     linux = 1
     osx = 2
@@ -67,9 +69,7 @@ def identify_license(metadata):
     if ('License' in metadata) and (metadata['License'][0].lower() != 'unknown'):
         return metadata['License'][0]
     for clf in metadata.get('Classifier', []):
-        print('Checking', clf)
         if clf in _license_classifiers:
-            print('Matched')
             return _license_classifiers[clf]
 
     return 'UNKNOWN'
@@ -230,14 +230,19 @@ class PackageBuilder:
 
     def write_index(self, tf):
         py_version_nodot = self.python_version.replace('.', '')
-        # TODO: identify dependencies, license
+        reqs = self.wheel_contents.metadata.get('Requires-Dist', [])
+        conda_reqs = requires_dist_to_conda_requirements(reqs,
+                                 python_version=self.python_version,
+                                 platform=self.platform.name,
+                                 bitness=self.bitness,
+        )
         ix = {
           "arch": "x86_64" if (self.bitness == '64') else 'x86',
           "build": "py{}_{}".format(py_version_nodot, self.build_no),
           "build_number": self.build_no,
           "depends": [
             "python {}*".format(self.python_version)
-          ],
+          ] + conda_reqs,
           "license": identify_license(self.wheel_contents.metadata),
           "name": self.wheel_contents.metadata['Name'][0],
           "platform": self.platform.name,
@@ -369,6 +374,3 @@ def main(argv=None):
             with (d / filename).open('wb') as f:
                 pb.build(f)
     wc.td.cleanup()
-
-if __name__ == '__main__':
-    main()
