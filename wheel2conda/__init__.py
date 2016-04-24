@@ -1,3 +1,5 @@
+"""Convert pure-Python wheels to conda packages"""
+
 import argparse
 import base64
 import configparser
@@ -15,6 +17,8 @@ import win_cli_launchers
 
 from .requirements import requires_dist_to_conda_requirements
 from .wheel import WheelContents
+
+__version__ = '0.1'
 
 class Platform(Enum):
     linux = 1
