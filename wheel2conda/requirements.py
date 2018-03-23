@@ -30,6 +30,10 @@ class EnvMarkerNameFiller(ast.NodeTransformer):
             # We can't really match this exactly, because we're building for
             # e.g. any Python 3.5.x
             new = ast.Str(self.python_version + '.0')
+        elif node.id == 'sys_platform':
+            new = ast.Str(sys_platforms[self.platform])
+        elif node.id == 'platform_python_implementation':
+            new = ast.Str('CPython')
         else:
             raise ValueError("Unexpected name: %s" % node.id)
 
@@ -58,7 +62,7 @@ class EnvMarkerNameFiller(ast.NodeTransformer):
         return ast.copy_location(new, node)
 
 def eval_env_marker(s, python_version, platform, bitness):
-    expr = ast.parse(s, '<environment_marker>', 'eval')
+    expr = ast.parse(s.strip(), '<environment_marker>', 'eval')
     filler = EnvMarkerNameFiller(python_version, platform, bitness)
     filler.visit(expr)
     codeobj = compile(expr, '<environment_marker', 'eval')
