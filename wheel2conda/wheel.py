@@ -70,7 +70,7 @@ class WheelContents:
     def filter_compatible_pythons(self, versions):
         if 'Requires-Python' in self.metadata:
             rp = self.metadata['Requires-Python'][0]
-            if rp.startswith(('3', '>3', '>=3')):
+            if rp.startswith(('3', '>3', '>=3', '~=3',)):
                 return [p for p in versions if not p.startswith('2.')]
             elif rp in ('<3', '<3.0'):
                 return [p for p in versions if p.startswith('2.')]
