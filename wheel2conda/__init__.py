@@ -18,7 +18,7 @@ import win_cli_launchers
 from .requirements import requires_dist_to_conda_requirements
 from .wheel import WheelContents
 
-__version__ = '0.1'
+__version__ = '0.2'
 
 class Platform(Enum):
     linux = 1
@@ -34,7 +34,7 @@ if __name__ == '__main__':
 
 PREFIX = '/opt/anaconda1anaconda2anaconda3'
 
-PYTHON_VERSIONS = ['3.5', '3.4', '2.7']
+PYTHON_VERSIONS = ['3.6', '3.5', '3.4', '2.7']
 PLATFORM_PAIRS = [
     (Platform.linux, '64'),
     (Platform.linux, '32'),
